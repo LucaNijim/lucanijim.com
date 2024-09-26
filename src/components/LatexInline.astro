@@ -2,12 +2,10 @@
 import katex from 'katex';
 
 const { formula = '' } = Astro.props;
-const html = katex.renderToString(formula, {displayMode: true, throwOnError: false});
+const html = katex.renderToString(formula, {throwOnError: false});
 ---
 
-<div class="text-center">
-	<span set:html={html} class="" />
-</div>
+<span set:html={html} class="" />
 
 <link
 	rel="stylesheet"
