@@ -2,6 +2,8 @@
 import BaseHead from '../components/BaseHead.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
+import ProfilePicture from '../../public/imgs/profile_picture.jpg';
+import { Image } from 'astro:assets';
 import { SITE_TITLE, SITE_DESCRIPTION } from '../consts';
 ---
 
@@ -15,7 +17,7 @@ import { SITE_TITLE, SITE_DESCRIPTION } from '../consts';
 		<main>
 			<div class="grid-container-element">
 				<h1 class="grid-child-element">Luca Nijim</h1>
-				<img class="grid-child-element profile-pic" src="../../public/imgs/profile_picture.jpeg"/>
+				<Image src={ProfilePicture} alt="Luca's Profile Picture" class="profile-pic grid-child-element"/>
 			</div>
 			<p>
 				I am Luca Nijim, an undergraduate studying pure math at the University of Notre Dame. 
