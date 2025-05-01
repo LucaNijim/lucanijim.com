@@ -45,8 +45,8 @@ svg.append("defs").append("clipPath")
 // --- data model: five random starting positions ---
 let points = d3.range(5).map((d, i) => ({
 id: i,
-x: Math.random() * width,
-y: Math.random() * height
+x: 2*pointRadius + Math.random() * (width - 4*pointRadius),
+y: 2*pointRadius + Math.random() * (height - 4*pointRadius),
 }));
 
 console.log("Initial data:", JSON.stringify(points, null, 2));
