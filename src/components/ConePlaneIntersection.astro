@@ -1,0 +1,221 @@
+---
+
+---
+
+<style is:global>
+    body { font-family: sans-serif; }
+    #cpi-chart { width: 100% }
+    .controls { display: flex; align-items: center; gap: 12px; margin: 8px 20px; }
+    .slider-container { display: flex; align-items: center; gap: 8px; }
+    label { margin-left: 4px; }
+    /* fixed width for slider labels */
+    .slider-container label { width: 70px; display: inline-block; }
+    .preset-buttons button {
+        width: 32px;
+        height: 32px;
+        padding: 4px;
+        border: 1px solid #ccc;
+        background: white;
+        border-radius: 4px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+    }
+    .preset-buttons button svg {
+        width: 100%; height: 100%;
+    }
+</style>
+<div id="cpi-chart"></div>
+
+<div class="controls">
+    <div class="slider-container">
+        <input type="range" id="a-slider" min="-2" max="2" step="0.1" value="1">
+        <label for="a-slider">a: <span id="a-value">1</span></label>
+    </div>
+    <div class="slider-container">
+        <input type="range" id="b-slider" min="-2" max="2" step="0.1" value="0">
+        <label for="b-slider">b: <span id="b-value">0</span></label>
+    </div>
+</div>
+<div class="controls">
+    <div class="preset-buttons">
+        <button id="preset-circle" title="Circle">
+            <svg viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="30" stroke="#333" stroke-width="8" fill="none" />
+            </svg>
+        </button>
+        <button id="preset-ellipse" title="Ellipse">
+            <svg viewBox="0 0 100 100">
+                <ellipse cx="50" cy="50" rx="35" ry="20" stroke="#333" stroke-width="8" fill="none" />
+            </svg>
+        </button>
+        <button id="preset-parabola" title="Parabola">
+            <svg viewBox="0 0 100 100">
+                <path d="M20,80 Q50,20 80,80" stroke="#333" stroke-width="8" fill="none" />
+            </svg>
+        </button>
+        <button id="preset-hyperbola" title="Hyperbola">
+            <svg viewBox="0 0 100 100">
+                <path d="M20,20 C40,20 40,40 20,40" stroke="#333" stroke-width="8" fill="none" />
+                <path d="M80,60 C60,60 60,80 80,80" stroke="#333" stroke-width="8" fill="none" />
+            </svg>
+        </button>
+    </div>
+</div>
+
+<script>
+    import * as d3 from 'd3';
+    window.addEventListener('DOMContentLoaded', () => {
+        const parentwidth = document.getElementById("cpi-chart").clientWidth;
+        const W = parentwidth, H = parentwidth/2;
+        const M = { top: 0, right: 0, bottom: 0, left: 0 };
+        const plot1 = { x: M.left, y: M.top, w: (W - M.left - M.right) * 0.5, h: H - M.top - M.bottom };
+        const plot2 = { x: M.left + plot1.w, y: M.top, w: (W - M.left - M.right) * 0.5 , h: plot1.h };
+        const eps = 0.1, rMax = 20;
+
+        const svg = d3.select('#cpi-chart')
+            .append('svg')
+            .attr('width', W)
+            .attr('height', H);
+        const defs = svg.append('defs');
+        defs.append('clipPath').attr('id', 'clip1').append('rect')
+            .attr('x', plot1.x).attr('y', plot1.y)
+            .attr('width', plot1.w).attr('height', plot1.h);
+        defs.append('clipPath').attr('id', 'clip2').append('rect')
+            .attr('x', plot2.x).attr('y', plot2.y)
+            .attr('width', plot2.w).attr('height', plot2.h);
+        const g3d = svg.append('g').attr('clip-path', 'url(#clip1)');
+        const g2d = svg.append('g').attr('clip-path', 'url(#clip2)');
+
+        // State variables
+        let a = 1, b = 0;
+        let rotY = 0;
+
+        const aSlider = document.getElementById('a-slider');
+        const bSlider = document.getElementById('b-slider');
+        const aValue = document.getElementById('a-value');
+        const bValue = document.getElementById('b-value');
+
+        function updateSliders() {
+            aSlider.value = a; bSlider.value = b;
+            aValue.textContent = a; bValue.textContent = b;
+        }
+        updateSliders();
+
+        // Preset buttons
+        document.getElementById('preset-circle').onclick = () => { a = 0; b = 0; updateSliders(); update(); };
+        document.getElementById('preset-ellipse').onclick = () => { a = 0.6; b = 0.2; updateSliders(); update(); };
+        document.getElementById('preset-parabola').onclick = () => { a = 1; b = 0; updateSliders(); update(); };
+        document.getElementById('preset-hyperbola').onclick = () => { a = 1; b = 1; updateSliders(); update(); };
+
+        // Slider inputs
+        aSlider.oninput = () => { a = +aSlider.value; aValue.textContent = a; update(); };
+        bSlider.oninput = () => { b = +bSlider.value; bValue.textContent = b; update(); };
+
+        // Rotation and projection
+        function rotateY(pt) {
+            const c = Math.cos(rotY), s = Math.sin(rotY);
+            return { x: pt.x*c + pt.z*s, y: pt.y, z: -pt.x*s + pt.z*c };
+        }
+        const scale3 = 20, cos30 = Math.sqrt(3)/2, sin30 = 0.5;
+        const cx = plot1.x + plot1.w/2, cy = plot1.y + plot1.h/2;
+        function project3D(pt) {
+            const r = rotateY(pt);
+            const X = (r.x - r.z)*cos30, Y = r.y + (r.x + r.z)*sin30;
+            return { x: cx + X*scale3, y: cy - Y*scale3 };
+        }
+
+        // Grid setup
+        const N = 30;
+        const xs = d3.range(-5, 5+1e-6, 10/(N-1));
+        const zs = d3.range(-5, 5+1e-6, 10/(N-1));
+
+        const baseLine = d3.line().curve(d3.curveLinear).x(d=>d.x).y(d=>d.y);
+        const intLine  = d3.line().defined(d=>d.valid).curve(d3.curveLinear).x(d=>d.x).y(d=>d.y);
+
+        // Drag behavior
+        svg.append('rect')
+            .attr('x', plot1.x).attr('y', plot1.y)
+            .attr('width', plot1.w).attr('height', plot1.h)
+            .style('fill', 'none').style('pointer-events', 'all')
+            .call(d3.drag().on('drag', ev => { rotY += ev.dx*0.01; update(); }));
+
+        function drawSurfaces() {
+            // Cone nappes
+            const Hup = xs.map(x => zs.map(z => project3D({ x, y: Math.sqrt(x*x+z*z), z }))),
+                Hdn = xs.map(x => zs.map(z => project3D({ x, y: -Math.sqrt(x*x+z*z), z }))),
+                Vup = zs.map(z => xs.map(x => project3D({ x, y: Math.sqrt(x*x+z*z), z }))),
+                Vdn = zs.map(z => xs.map(x => project3D({ x, y: -Math.sqrt(x*x+z*z), z })));
+            g3d.selectAll('.Hup').data(Hup).join('path').attr('d', baseLine).attr('stroke','#888').attr('fill','none');
+            g3d.selectAll('.Hdn').data(Hdn).join('path').attr('d', baseLine).attr('stroke','#888').attr('fill','none');
+            g3d.selectAll('.Vup').data(Vup).join('path').attr('d', baseLine).attr('stroke','#888').attr('fill','none');
+            g3d.selectAll('.Vdn').data(Vdn).join('path').attr('d', baseLine).attr('stroke','#888').attr('fill','none');
+            // Plane
+            const Ph = xs.map(x => zs.map(z => project3D({ x, y: 2 + a*(x-1) + b*z, z }))),
+                Pv = zs.map(z => xs.map(x => project3D({ x, y: 2 + a*(x-1) + b*z, z })));
+            g3d.selectAll('.Ph').data(Ph).join('path').attr('d', baseLine).attr('stroke','#3498db').attr('fill','none');
+            g3d.selectAll('.Pv').data(Pv).join('path').attr('d', baseLine).attr('stroke','#3498db').attr('fill','none');
+        }
+
+        function computeIntersection3D() {
+            const pts1 = [], pts2 = [];
+            const c0 = 2 - a, M2 = 300;
+            for (let i = 0; i < M2; i++) {
+                const t = 2 * Math.PI * i / M2, A = a * Math.cos(t), B = b * Math.sin(t);
+                let d = A + B - 1, r = -c0 / d;
+                let valid = Math.abs(d) > eps && Math.abs(r) < rMax;
+                let x = r * Math.cos(t), z = r * Math.sin(t);
+                pts1.push({ ...(valid ? project3D({ x, y: 2 + a*(x-1) + b*z, z }) : { x:0, y:0 }), valid });
+                d = A + B + 1; r = -c0 / d;
+                valid = Math.abs(d) > eps && Math.abs(r) < rMax;
+                x = r * Math.cos(t); z = r * Math.sin(t);
+                pts2.push({ ...(valid ? project3D({ x, y: 2 + a*(x-1) + b*z, z }) : { x:0, y:0 }), valid });
+            }
+            return [pts1, pts2];
+        }
+
+        function drawIntersection3D() {
+            const [p1, p2] = computeIntersection3D();
+            g3d.selectAll('.i1').data([p1]).join('path').attr('d', intLine).attr('stroke','red').attr('fill','none').attr('stroke-width',2);
+            g3d.selectAll('.i2').data([p2]).join('path').attr('d', intLine).attr('stroke','red').attr('fill','none').attr('stroke-width',2);
+        }
+
+        function draw2DProjection() {
+            g2d.selectAll('*').remove();
+            const xS = d3.scaleLinear().domain([-6,6]).range([plot2.x, plot2.x + plot2.w]);
+            const zS = d3.scaleLinear().domain([-6,6]).range([plot2.y + plot2.h, plot2.y]);
+            //g2d.append('g').attr('transform', `translate(0,${plot2.y + plot2.h})`).call(d3.axisBottom(xS));
+            //g2d.append('g').attr('transform', `translate(${plot2.x},0)`).call(d3.axisLeft(zS));
+
+            // Projection curves
+            const data1 = [], data2 = [];
+            const c0 = 2 - a, M2 = 300;
+            for (let i = 0; i < M2; i++) {
+                const t = 2 * Math.PI * i / M2;
+                const A = a * Math.cos(t), B = b * Math.sin(t);
+                let d1 = A + B - 1, r1 = -c0 / d1;
+                const ok1 = Math.abs(d1) > eps && Math.abs(r1) < rMax;
+                data1.push({ x: r1 * Math.cos(t), z: r1 * Math.sin(t), valid: ok1 });
+                let d2 = A + B + 1, r2 = -c0 / d2;
+                const ok2 = Math.abs(d2) > eps && Math.abs(r2) < rMax;
+                data2.push({ x: r2 * Math.cos(t), z: r2 * Math.sin(t), valid: ok2 });
+            }
+            const projLine = d3.line().defined(d => d.valid).curve(d3.curveLinear)
+                .x(d => xS(d.x)).y(d => zS(d.z));
+            g2d.append('path').datum(data1).attr('d', projLine).attr('stroke','red').attr('fill','none').attr('stroke-width',2);
+            g2d.append('path').datum(data2).attr('d', projLine).attr('stroke','red').attr('fill','none').attr('stroke-width',2);
+        }
+
+        function update() {
+            g3d.selectAll('*').remove();
+            g2d.selectAll('*').remove();
+            drawSurfaces();
+            drawIntersection3D();
+            draw2DProjection();
+        }
+
+        update();
+    });
+    </script>
+

@@ -1,0 +1,272 @@
+
+<h2>Drag the points – the red curve updates in real‑time</h2>
+
+<div id="chart-container">
+    <svg id="chart"></svg>
+</div>
+
+<style is:global>
+body { font-family: sans-serif; margin: 0; padding: 1rem; }
+#chart { border: none; }
+.conic { fill: none; stroke: crimson; stroke-width: 1; }
+.disc-positive { fill: orange; stroke: none; }
+.disc-negative { fill: steelblue; stroke: none; }
+.disc-iso { fill: none; stroke: green; stroke-width: 1; } /* sharp continuous parabola line */
+</style>
+
+<script>
+// --- configuration ---
+import * as d3 from 'd3';
+import { lusolve } from 'mathjs';
+
+const parentwidth = document.getElementById("chart-container").clientWidth;
+
+console.log("parent width: " + parentwidth);
+
+var width = parentwidth,
+height = parentwidth*2/3,
+pointRadius = 8,
+gridResolution = 250,     // resolution for conic rendering
+discResolution = 250;      // coarser resolution for discriminant sketch
+
+// attach SVG size
+const svg = d3.select("#chart")
+.attr("width", width)
+.attr("height", height);
+
+// clip‑path to prevent border artifacts (slightly inset to hide edge strokes)
+const clipId = "clip-conic";
+svg.append("defs").append("clipPath")
+.attr("id", clipId)
+.append("rect")
+.attr("x", 1)
+.attr("y", 1)
+.attr("width", width - 2)
+.attr("height", height - 2);
+
+// --- data model: five random starting positions ---
+let points = d3.range(5).map((d, i) => ({
+id: i,
+x: Math.random() * width,
+y: Math.random() * height
+}));
+
+console.log("Initial data:", JSON.stringify(points, null, 2));
+
+// --- draw circles ---
+const circles = svg.selectAll("circle")
+.data(points, (d) => d.id)
+.enter()
+.append("circle")
+.attr("r", pointRadius)
+.attr("cx", d => d.x)
+.attr("cy", d => d.y)
+.attr("fill", "#1f77b4")
+.style("cursor", "grab");
+
+circles.call(
+d3.drag()
+.on("start", dragStarted)
+.on("drag", dragged)
+.on("end", dragEnded)
+);
+
+// initial draw
+plotConicSection(points);
+
+// --- drag handlers ---
+function dragStarted(event, d) {
+    d3.select(this)
+        .raise()
+        .attr("stroke", "black")
+        .style("cursor", "grabbing");
+
+    hideConicSection();
+    sketchDiscriminantPicture(points, d);
+}
+
+function dragged(event, d) {
+// constrain within SVG bounds
+    d.x = Math.max(pointRadius, Math.min(width  - pointRadius, event.x));
+    d.y = Math.max(pointRadius, Math.min(height - pointRadius, event.y));
+
+    d3.select(this)
+        .attr("cx", d.x)
+        .attr("cy", d.y);
+}
+
+function dragEnded() {
+    d3.select(this).attr("stroke", null).style("cursor", "grab");
+    console.log("Updated data:", JSON.stringify(points, null, 2));
+
+    hideDiscriminantPicture();
+    plotConicSection(points);
+}
+
+// --- helper: hide the main conic while dragging ---
+function hideConicSection() {
+    svg.selectAll("path.conic").remove();
+}
+
+// --- helper: hide discriminant picture after drag ends ---
+function hideDiscriminantPicture() {
+    svg.selectAll("g.disc-layer").remove();
+}
+
+/*
+Visualise how the discriminant (B^2 − 4AC) of the interpolating conic
+depends on the current point while it is being dragged. Positive → hyperbola,
+negative → ellipse, zero → parabola.
+*/
+function sketchDiscriminantPicture(points, currentPoint) {
+// clear any previous sketch
+  hideDiscriminantPicture();
+
+// points without the one currently dragged
+  const basePts = points.filter(p => p.id !== currentPoint.id);
+
+    const n = discResolution;
+    const discVals = new Array(n * n);
+
+    for (let gy = 0; gy < n; ++gy) {
+        for (let gx = 0; gx < n; ++gx) {
+            const x = gx / (n - 1) * width;
+            const y = gy / (n - 1) * height;
+            let disc = NaN;
+            try {
+                const coeffs = computeConicCoords([...basePts, {x, y}]);
+                disc = coeffs.B * coeffs.B - 4 * coeffs.A * coeffs.C;
+            } catch (err) {
+                disc = NaN;
+            }
+            discVals[gy * n + gx] = disc;
+        }
+    }
+
+    // derive sign grids for positive / negative regions
+    const signPos = discVals.map(v => (isFinite(v) && v > 0 ? 1 : 0));
+    const signNeg = discVals.map(v => (isFinite(v) && v < 0 ? 1 : 0));
+
+    const contourGen = d3.contours().size([n, n]);
+
+    const posRegions = contourGen.thresholds([0.5])(signPos); // value 1 => positive
+    const negRegions = contourGen.thresholds([0.5])(signNeg); // value 1 => negative
+    const isoCurve   = contourGen.thresholds([0])(discVals);  // discriminant = 0
+
+    // add a dedicated layer beneath everything else
+    const layer = svg.append("g")
+        .attr("class", "disc-layer")
+        .attr("opacity", 0.25)
+        .lower();
+
+    // positive (hyperbola) fill
+    layer.selectAll("path.disc-positive")
+        .data(posRegions)
+        .enter().append("path")
+        .attr("class", "disc-positive")
+        .attr("d", d3.geoPath())
+        .attr("transform", `scale(${width / (n - 1)}, ${height / (n - 1)})`)
+        .attr("clip-path", `url(#${clipId})`);
+
+    // negative (ellipse) fill
+    layer.selectAll("path.disc-negative")
+        .data(negRegions)
+        .enter().append("path")
+        .attr("class", "disc-negative")
+        .attr("d", d3.geoPath())
+        .attr("transform", `scale(${width / (n - 1)}, ${height / (n - 1)})`)
+        .attr("clip-path", `url(#${clipId})`);
+
+    // discriminant = 0 isoline (parabola boundary)
+    layer.selectAll("path.disc-iso")
+        .data(isoCurve)
+        .enter().append("path")
+        .attr("class", "disc-iso")
+        .attr("d", d3.geoPath())
+        .attr("transform", `scale(${width / (n - 1)}, ${height / (n - 1)})`)
+        .attr("clip-path", `url(#${clipId})`);
+
+    // keep the draggable circles on top
+    svg.selectAll("circle").raise();
+}
+
+// --- plotting ---
+function plotConicSection(points) {
+    let coeffs;
+    try {
+        coeffs = computeConicCoords(points);
+    } catch (err) {
+        console.error(err.message);
+        return;
+    }
+
+    const {A, B, C, D, E} = coeffs;
+
+    // sample scalar field f(x,y) = A x^2 + B x y + C y^2 + D x + E y - 1
+    const n = gridResolution;
+    const values = new Array(n * n);
+    for (let gy = 0; gy < n; ++gy) {
+        for (let gx = 0; gx < n; ++gx) {
+        const x = gx / (n - 1) * width;
+        const y = gy / (n - 1) * height;
+        values[gy * n + gx] = A * x * x + B * x * y + C * y * y + D * x + E * y - 1;
+    }
+}
+
+// extract the 0‑level contour (implicit curve)
+    const contours = d3.contours()
+        .size([n, n])
+        .thresholds([0])(values);
+
+    const paths = svg.selectAll("path.conic").data(contours);
+
+    paths.enter()
+        .append("path")
+        .attr("class", "conic")
+        .merge(paths)
+        .attr("d", d3.geoPath())
+        // scale the path from grid to SVG coordinates
+        .attr("transform", `scale(${width / (n - 1)}, ${height / (n - 1)})`)
+        .attr("clip-path", `url(#${clipId})`);
+
+    paths.exit().remove();
+
+// ensure points remain on top of the conic path
+    svg.selectAll("circle").raise();
+}
+
+// --- maths ---
+/*
+Solves for coefficients (A, B, C, D, E) in the implicit conic:
+A x^2 + B x y + C y^2 + D x + E y = 1
+using the 5 supplied points. Requires exactly 5 non‑collinear points.
+*/
+function computeConicCoords(points) {
+    if (points.length !== 5) {
+        throw new Error("computeConicCoords() expects exactly five points.");
+    }
+
+    // build 5×5 matrix M and RHS vector b = [1,1,1,1,1]^T
+    const M = points.map(p => [
+        p.x * p.x,
+        p.x * p.y,
+        p.y * p.y,
+        p.x,
+        p.y
+    ]);
+    const b = Array(5).fill(1);
+
+    // solve M * coeffs = b using math.js (LU decomposition)
+      const coeffVec = lusolve(M, b).map(arr => arr[0]); // flatten
+      const [A, B, C, D, E] = coeffVec;
+
+    // simple sanity check – plug points back in; warn if off by >1e‑6
+      const maxErr = Math.max(...points.map(p => Math.abs(A*p.x*p.x + B*p.x*p.y + C*p.y*p.y + D*p.x + E*p.y - 1)));
+    if (maxErr > 1e-6) {
+        console.warn(`Conic fit residual max error: ${maxErr}`);
+    }
+
+    return {A, B, C, D, E};
+}
+</script>
+
